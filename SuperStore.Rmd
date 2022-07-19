@@ -1,0 +1,1489 @@
+---
+title: "Super Store Veri Analizi"
+output: 
+  html_document :
+    theme: cerulean
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+# Örneklem çekme
+verimiz çok büyük olduğu için %4lük bir örneklem çekerek 400 gözlemlik bir veri seti elde ediyoruz.
+```{r}
+library(readxl)
+ogveri <- read_excel("C:/Users/SİMAY/Documents/Veri Setleri/ogveri.xlsx")
+View(ogveri)
+```
+
+
+
+
+Kategorik değişkenleri tanımlıyoruz
+```{r}
+ogveri$`Ship Mode` <- factor(ogveri$`Ship Mode`, levels=c("Second Class","Standard Class","First Class","Same Day"))
+ogveri$Segment <- factor(ogveri$Segment, levels=c ("Consumer","Home Office","Corporate"))
+ogveri$Country <- factor(ogveri$Country, levels=c ("United States"))
+ogveri$Country <- factor(ogveri$Country, levels=c ("United States"))
+ogveri$Region <- factor(ogveri$Region, levels=c("West","Central","East","South"))
+ogveri$Region <- factor(ogveri$Region, levels=c("West","Central","East","South"))
+ogveri$Category <- factor(ogveri$Category, levels=c("Technology","Office Supplies","Furniture"))
+ogveri$`Sub-Category` <- as.factor(ogveri$`Sub-Category`)
+ogveri$City <- as.factor(ogveri$City)
+ogveri$State <- as.factor(ogveri$State)
+Quantity <- as.numeric(ogveri$Quantity)
+Discount <- as.numeric(ogveri$Discount)
+Profit <- as.numeric(ogveri$Profit)
+Sales <- as.numeric(ogveri$Sales)
+summary(ogveri)
+
+```
+
+
+
+
+çektiğimiz örneklemi bilgisayara aktarıyoruz.
+```{r}
+library("openxlsx")
+write.xlsx(ogveri, 'ogveri.xlsx')
+```
+
+# Eksik Veriler
+
+```{r}
+rowSums(is.na(ogveri))
+colSums(is.na(ogveri))
+```
+
+Veride eksik değişken olmadığı için kendimiz yaratıyoruz
+
+```{r}
+data_miss<-ogveri
+aa<-sample(1:nrow(data_miss),floor(nrow(data_miss)*0.05))
+data_miss$Quantity[aa]<-NA
+colSums(is.na(data_miss))
+View(data_miss)
+```
+
+Mice paketini kullanarak eksik gözlemlerimizin yapısını inceliyoruz.
+
+```{r}
+library(mice)
+md.pattern(data_miss,rotate.names = TRUE)
+
+```
+
+Eksik gözlemlerin "Quantity" değişkeninde 20 adet olduğunu gözlemliyoruz. 380 tane de dolu veri bulunmakta.
+
+
+Şimdi de aggr fonksiyonu ile eksik gözlemlerin yapısını inceleyelim. Bunun için öncelikle VIM ve ISLR kütüphanelerini import ediyoruz.
+```{r}
+library(VIM)
+library(ISLR)
+aggr(data_miss,col=c("navyblue","pink"),numbers=TRUE, sortVars=TRUE, labels=names(data_miss),cex.axis=.7,gap=3,ylab=c("Missing Ratio","Missing Pattern"))
+```
+
+Eksik gözlemlerin veri setimizin %0,05 kadarlık bir kısmını kapladığını görüyoruz. Eksik gözlemlerin yalnızca "Quantity" değişkeninde bulunduğunu da görebiliyoruz.
+
+Karar ağacı yöntemiyle eksik gözlemlerimizi doldurmayı tercih ediyoruz.
+Karar ağacı öğrenmesi (decision tree learning) yöntemi, makine öğrenmesi (machine learning) konularından birisidir. Literatürde karar ağacı öğrenmesinin alt yöntemleri olarak kabul edilebilecek sınıflandırma ağacı (classification tree) veya ilkelleştirme ağacı (regression tree ,tahmin ağacı) gibi uygulamaları vardır.
+
+Karar ağacı öğrenmesinde, bir ağaç yapısı oluşturularak ağacın yaprakları seviyesinde sınıf etiketleri ve bu yapraklara giden ve başlangıçtan çıkan kollar ile de özellikler üzerindeki işlemeler ifade edilmektedir.
+
+
+
+```{r}
+library(rpart)
+data_dt<-data_miss
+rtree <- rpart(Quantity ~ Discount + Profit+ Sales, data_dt, method="anova")
+library(rattle)
+fancyRpartPlot(rtree,cex=0.5)
+data_dt$Quantity <- ifelse(is.na(data_dt$Quantity), predict(rtree,data_dt,type="vector"),data_dt$Quantity)
+```
+```{r}
+library(mice)
+md.pattern(data_dt,rotate.names = TRUE)
+```
+
+
+
+# Kullanılmayan değişkenlerin silinmesi 
+
+
+
+eksik değerleri tamamlanmış data_dt'yi bilgisayarımıza kaydediyoruz
+
+```{r}
+library("openxlsx")
+write.xlsx(data_dt, "data_imputed.xlsx")
+```
+
+# Veri setini eğitim ve test veri kümesi olarak bölmek
+
+Rastgeleliği sabitlemek için seed fonksiyonunu kullanıyoruz. Veri setimizin %80'i ile bir eğitim verisi oluşturuyoruz.
+
+```{r}
+set.seed(52685136)
+trainIndex <- sample(1:nrow(ogveri), size = round(0.8*nrow(ogveri)), replace=FALSE)
+tra <- ogveri[trainIndex,]
+tst <- ogveri[-trainIndex,]
+```
+
+```{r}
+library("openxlsx")
+write.xlsx(tra, 'train.xlsx')
+write.xlsx(tst, 'test.xlsx')
+
+```
+
+Eğitim verimizi data frame formatına çeviriyoruz. Analizlerimizde bundan sonrası için eğitim verimizi kullanacağız.
+```{r}
+tra<-as.data.frame(tra)
+```
+
+```{r}
+library(dplyr)
+glimpse(tra)
+summary(tra)
+```
+
+# Sayısal verileri kategorize etmek
+
+"Discount" değişkenimizi değerler 0'ın altında ise "indirim yok" 0'ın üstüne ise "indirimli" olarak kategorize ediyoruz.
+```{r}
+tra$Indirim_kat[tra$Discount <= 0] <- "indirim yok"
+tra$Indirim_kat[tra$Discount > 0] <- "indirimli"
+```
+```{r}
+tra$Karlilik[tra$Profit >= 0] <- "kar"
+tra$Karlilik[tra$Profit < 0] <- "zarar"
+```
+```{r}
+tra$Karlilik <- as.factor(tra$Karlilik)
+```
+
+
+```{r}
+tra$Indirim_kat <- as.factor(tra$Indirim_kat)
+summary(tra)
+```
+```{r}
+glimpse(tra)
+```
+
+# Aykırı/uç değerlerin tespiti
+
+Aykırı/uç değerleri incelemek için "Quantity" değişkeni üzerinde box-plot grafiğini deniyoruz.
+
+```{r}
+library(ggplot2)
+ggplot() +
+  aes(x = "", y = Quantity) +
+  geom_boxplot(fill = "#0c4c8a") +
+  theme_minimal()
+```
+
+
+
+
+Fakat box-plot grafiği bize istediğimiz kadar bilgi ve detay sağlayamamakta. Bu nedenle istatistiksel yöntem olan "Hampel filter" yardımı ile potansiyel aykırı değerleri bulmayı deneyeceğiz.
+
+Frank Rudolf Hampel tarafından literatüre kazandırılan ve popülerleştirilen ortanca mutlak sapma değeri, veri setindeki gözlemlerin ortanca değerden ne kadar uzakta olduğunun ölçüsüdür.
+
+aykırı değerleri belirlemek için alt ve üst eşik değerleri şöyle hesaplanır:
+
+_**Alt eşik = Ortanca – 3 * (MAD), Üst eşik = Ortanca + 3 * (MAD)**_
+
+Genel bir ifade olarak, ortanca değerden 3 ortanca mutlak sapma uzaklıkta olan gözlemleri aykırı değer olarak konumlayabilirsiniz.
+
+```{r}
+lower_bound_profit <- median(Profit) - 3 * mad(Profit, constant = 1)
+lower_bound_profit
+```
+```{r}
+upper_bound_profit <- median(Profit) + 3 * mad(Profit, constant = 1)
+upper_bound_profit
+```
+
+```{r}
+outlier_ind_profit <- which(Profit < lower_bound_profit | Profit > upper_bound_profit)
+outlier_ind_profit
+```
+```{r}
+lower_bound_discount <- median(Discount) - 3 * mad(Discount, constant = 1)
+lower_bound_discount
+```
+```{r}
+upper_bound_discount <- median(Discount) + 3 * mad(Discount, constant = 1)
+upper_bound_discount
+```
+```{r}
+outlier_ind_discount <- which(Discount < lower_bound_discount | Discount > upper_bound_discount)
+outlier_ind_discount
+```
+```{r}
+lower_bound_sales <- median(Sales) - 3 * mad(Sales, constant = 1)
+lower_bound_sales
+```
+
+```{r}
+upper_bound_sales <- median(Sales) + 3 * mad(Sales, constant = 1)
+upper_bound_sales
+```
+
+```{r}
+outlier_ind_sales <- which(Sales < lower_bound_sales | Sales > upper_bound_sales)
+outlier_ind_sales
+```
+
+```{r}
+upper_bound_quantity <- median(Quantity) + 3 * mad(Quantity, constant = 1)
+upper_bound_quantity
+```
+
+```{r}
+lower_bound_quantity <- median(Quantity) - 3 * mad(Quantity, constant = 1)
+lower_bound_quantity
+```
+
+```{r}
+outlier_ind_quantity <- which(Quantity < lower_bound_quantity | Quantity > upper_bound_quantity)
+outlier_ind_quantity
+```
+
+Uç değerler bilgi verici olduğu için eleme yapmamayı seçiyoruz. 
+
+# Verilerin açıklayıcı/Keşfedici çözümlemesi
+
+### Histogram grafiği
+
+```{r}
+hist(tra$Sales, col = "darkgreen")
+```
+
+Sales değişkenimiizin dağılımının bu grafiğe baktığımız zaman normal dağılıma çok uzak olduğunu gözlemiyoruz. Yüksek derecede sağa çarpıklık bulunmaktadır. İlerleyen adımlarda dönüşüm gerekmektedir.
+
+```{r}
+hist(tra$Profit, col = "green")
+```
+
+Profit değişkenimiizin dağılımının bu grafiğe baktığımız zaman normal dağılıma çok uzak olduğunu gözlemiyoruz. Yüksek derecede sola çarpıklık bulunmaktadır. İlerleyen adımlarda dönüşüm gerekmektedir.
+
+```{r}
+hist(tra$Discount, col = "yellow")
+```
+Discount değişkenimiizin dağılımının bu grafiğe baktığımız zaman normal dağılıma çok uzak olduğunu gözlemiyoruz. Yüksek derecede sağa çarpıklık bulunmaktadır. İlerleyen adımlarda dönüşüm gerekmektedir.
+
+```{r}
+hist(tra$Quantity, col = "purple")
+```
+Quantity değişkenimiizin dağılımının bu grafiğe baktığımız zaman normal dağılıma çok uzak olduğunu gözlemiyoruz. Yüksek derecede sağa çarpıklık bulunmaktadır. İlerleyen adımlarda dönüşüm gerekmektedir.
+
+```{r}
+quantity <- as.numeric(tra$Quantity)
+discount <- as.numeric(tra$Discount)
+profit <- as.numeric(tra$Profit)
+sales <- as.numeric(tra$Sales)
+```
+
+### Kutu grafiği 
+
+```{r}
+library(ggplot2)
+ggplot() +
+  aes(x = "", y = discount) +
+  geom_boxplot(fill = "#0c4c8a") +
+  theme_minimal()
+```
+Burda da Discount değişkeninin aykırı değerlere sahip olduğunu ve sağa çarpık olduğunu bir kez daha kutu grafiği sayesinde gözlemliyoruz. 
+
+```{r}
+library(ggplot2)
+ggplot() +
+  aes(x = "", y = quantity) +
+  geom_boxplot(fill = "#0c4c8a") +
+  theme_minimal()
+```
+
+
+
+
+Burda da Quantity değişkeninin aykırı değerlere sahip olduğunu ve sağa çarpık olduğunu bir kez daha kutu grafiği sayesinde gözlemliyoruz. 
+
+```{r}
+library(ggplot2)
+ggplot() +
+  aes(x = "", y = profit) +
+  geom_boxplot(fill = "#0c4c8a") +
+  theme_minimal()
+```
+
+Bu grafikte boxplot verinin dağılımından dolayı çok açıklayıcı bir görüntü sağlamamaktadır. Fakat yine de aykırı değerlerin olduğunu ve verininin dağılımının sola çarpık olduğunu gözlemleyebiliyoruz.
+
+```{r}
+library(ggplot2)
+ggplot() +
+  aes(x = "", y = sales) +
+  geom_boxplot(fill = "#0c4c8a") +
+  theme_minimal()
+```
+Bu grafikte Sales değişkenlerinin birbirinden fazlasıyla değişkenlik gösterdiğini , verinin oldukça sağa çarpık olduğunu ve uç değerlerin çok fazla olduğunu gözlemleyebiliyoruz.
+
+
+### Q-Q çizimi
+
+```{r}
+ggplot(tra, aes(sample=Profit))+stat_qq()
+qqnorm(tra$Profit)
+```
+Profit değişkenimiz iç bükey (konkav) olduğunu bu nedenle sağa çarpık olduğunu diğer grafiklerdeki gibi gözlemleyebiliyoruz. Aynı zamanda aykırı değerlerin varlığı bu grafikte de aşikardır.
+```{r}
+ggplot(tra, aes(sample=Discount))+stat_qq()
+qqnorm(tra$Discount)
+```
+
+```{r}
+ggplot(tra, aes(sample=Sales))+stat_qq()
+qqnorm(tra$Sales)
+```
+
+Dış bükey (konveks) olduğundan dağılımın sola çarpık olduğunu söyleyebiliriz. Aynı zamanda uç değerlerin varlığı da aşikardır. 
+
+```{r}
+ggplot(tra, aes(sample=Quantity))+stat_qq()
+qqnorm(tra$Quantity)
+```
+
+Buradan quantity değişkeninin kesikli değişken olduğunu görüyoruz.
+
+
+### Matris formlu saçılım grafikleri
+
+
+```{r}
+cor_tra<-tra[,c(9,10,11,12)]
+library(GGally)
+cor(cor_tra)
+plot(cor_tra)
+ggpairs(cor_tra)
+```
+
+
+
+```{r}
+p <- GGally::ggpairs(tra[,c(1:3,6)], aes(color = tra$Indirim_kat))
+p
+```
+
+```{r}
+p <- GGally::ggpairs(tra[,c(1:3,6)], aes(color = tra$Region))
+p
+```
+
+Değişken türlerine göre incelemeler
+
+```{r}
+library(funModeling)
+profiling_num(tra)#niceller uzerinden
+plot_num(tra)#niceller
+freq(tra)#kategorikler
+```
+
+
+Değişkenlerin hiçbiri normal dağılmamıştır. İlerleyen bölümlerde dönüşüm uygulamamız gerekmektedir.
+
+Ship Mode değişkeninde en çok kullanılan yöntem standart Class olurken en az kullanılan yöntem same day yöntemidir.
+
+Segment içerisinde de en çok alanı consumer segmenti kapsamaktadır.
+
+Tek ülke united states 
+
+En çok California eyaletinde işlem yapılmıştır.
+
+Region değişkeninde ise west ve east eşittir.
+
+Category değişkeninde en çok Office Supplies işlem görmüştür.
+
+Sub-Categoryde ise Binders
+
+Genel olarak indirim yapıldığını görüyoruz.
+
+Zarardan çok kar edildiğini gözlemliyoruz.
+
+
+
+
+
+Kategorik degiskenin duzeyleri bazında, nicel degıskenlerın ozet istatistiklerii
+
+```{r}
+library(psych)
+library(dplyr)
+df  <- dplyr:: select(tra, Profit, Indirim_kat)
+describeBy(df, (df$Indirim_kat))
+```
+
+## Çok değişkenli kutu grafikleri
+
+```{r}
+library(ggplot2)
+ggplot(tra, aes(x=Category,y=Profit, fill=Category))+
+  geom_boxplot()+
+  stat_summary(fun = median, geom="line", group= 1, color= "black", size = 1) 
+```
+
+```{r}
+library(ggplot2)
+ggplot(tra, aes(x=`Sub-Category`,y=Profit, fill=`Sub-Category`))+
+  geom_boxplot()+
+  stat_summary(fun = median, geom="line", group= 1, color= "black", size = 1) 
+```
+
+```{r}
+library(ggplot2)
+ggplot(tra, aes(x=Region,y=Profit, fill=Region))+
+  geom_boxplot()+
+  stat_summary(fun = median, geom="line", group= 1, color= "black", size = 1) 
+```
+```{r}
+library(ggplot2)
+ggplot(tra, aes(x=Segment,y=Profit, fill=Segment))+
+  geom_boxplot()+
+  stat_summary(fun = median, geom="line", group= 1, color= "black", size = 1) 
+```
+```{r}
+library(ggplot2)
+ggplot(tra, aes(x=`Ship Mode`,y=Profit, fill=`Ship Mode`))+
+  geom_boxplot()+
+  stat_summary(fun = median, geom="line", group= 1, color= "black", size = 1) 
+```
+
+Kutu grafikleri sağlıklı sonuçlar vermedi. Verilerin kendi içindeki veya birbirleriyle olan ilişkisindeki çarpıklık gibi bir problemden dolayı olabilir.
+
+
+## Chernoff Yüzleri
+
+```{r}
+library(aplpack)
+library(dplyr)
+
+new_data<-tra%>%
+  group_by(Region) %>%
+  dplyr::summarize(mean_profit = mean(Profit),mean_saless = mean(Sales),mean_discountt = mean(Discount))
+
+faces(new_data[,-1],  labels=as.character(new_data$Region))
+
+```
+
+En çok kar Batıda gerçekleşmiştir.
+
+## Yıldız Grafikler
+
+```{r}
+data_sorted <- tra[order(-tra$Profit),]
+```
+
+Veriyi dilimleme
+
+```{r}
+library(ggplot2)
+data_sorted$group <- as.numeric(cut_number(as.numeric(rownames(data_sorted)), 10)) 
+```
+
+```{r}
+library(dplyr)
+data_star<-data_sorted %>%
+  group_by(group) %>% 
+  dplyr::summarize(Satis= mean(Sales), Miktar= mean(Quantity),Fev= mean(Profit))
+
+stars(data_star[,-1], key.loc = c(15,1.25),main = "Starplot",label=row.names(data_star),cex=.7)
+
+```
+Kümeleme yapmak istersek 10 ve 8 birbirine çok yakın. 2 ve 9 birbirine çok yakın.
+
+
+
+
+# Temel İstatistikler
+
+## Nokta ölçüleri
+
+3 Nokta Özeti
+
+
+```{r}
+n<-nrow(tra)
+train_sorted <- tra[order(tra$Sales),]
+```
+
+```{r}
+a<-(n/2)
+b<-(n/2)+1
+(train_sorted$Sales[a]+train_sorted$Sales[b])/2 
+median(tra$Sales)
+mean(tra$Sales)
+hist(tra$Sales)
+```
+Sales değişkeninde çarpıklık bulunmakta
+
+
+5 Nokta özeti
+
+```{r}
+fivenum(tra$Sales) 
+```
+
+## Değişim ölçüleri
+
+```{r}
+stdev<-sd(tra$Sales)
+mean<-mean(tra$Sales)
+Degisim_kats_sales<-(stdev/mean)*100
+```
+
+## MAD (Median Absolute Deviation)
+
+```{r}
+sort <- tra[order(tra$Sales),]
+medianf<-median(tra$Sales)
+sort$fmed<-abs(sort$Sales-medianf)
+sort2 <- sort[order(sort$fmed),]
+mad<-median(sort2$fmed)
+```
+
+### Genişletilmiş Nokta Özeti
+
+Sol kuyruk
+
+```{r}
+sol <- function(x) {
+  c(quantile(x, probs = 1/2) , 
+    quantile(x, probs = 1/4),
+    quantile(x, probs =1/8 ),
+    quantile(x,probs=1/16),
+    quantile(x,probs=1/32),
+    quantile(x,probs=1/64)
+  )
+}
+```
+
+
+Sağ kuyruk
+
+
+
+```{r}
+sag <- function(x) {
+  c(quantile(x, probs = 1/2) , 
+    quantile(x, probs = 3/4),
+    quantile(x, probs = 7/8),
+    quantile(x,probs=15/16),
+    quantile(x,probs=31/32),
+    quantile(x,probs=63/64)
+  )
+}
+```
+
+
+## Kuyruk uzunluğu incelemesi
+
+```{r}
+x_a<-sol(tra$Profit)
+x_u<-sag(tra$Profit)
+x_mrg<-as.data.frame(cbind(x_a,x_u))
+rownames(x_mrg)<-c("1/2","1/4","1/8","1/16","1/32","1/64")
+colnames(x_mrg)<-c("Alt_Kuyruk","Ust_Kuyruk")
+x_mrg$orta_nokta<-(x_mrg$Alt_Kuyruk+x_mrg$Ust_Kuyruk)/2
+x_mrg
+hist(tra$Profit)
+```
+
+Profit değişkeninin de çarpık olduğunu görebiliyoruz.
+
+
+## Kesilmiş ortalama
+
+```{r}
+p<-0.1
+mean(tra$Profit, trim = p)
+
+#Kalan gozlem sayısı hesaplanmak istenirse:
+n<-nrow(tra)
+ks<-n-(as.integer(2*p*n)) 
+ks
+
+```
+Ortalama değerimiz olan 14.51 'e karşılık gelen 256 gözlemimiz var
+
+## Geometrik ortalama
+
+```{r}
+library("psych")
+geometric.mean(tra$Sales)
+```
+
+## Gini
+
+```{r}
+freq <- as.data.frame(table(tra$Category))
+names(freq)[1] <- 'Kategori'
+
+gini <- function(a,b) {
+  a1 <- (a/(a+b))**2
+  b1 <- (b/(a+b))**2
+  x<-1-(a1 + b1)
+  return(x)
+}
+gn<-gini(freq[1,2],freq[2,2])
+k<-2
+gn/((k-1)/k)
+```
+
+```{r}
+freq <- as.data.frame(table(tra$`Indirim_kat`))
+names(freq)[1] <- 'Kategori'
+
+gini <- function(a,b) {
+  a1 <- (a/(a+b))**2
+  b1 <- (b/(a+b))**2
+  x<-1-(a1 + b1)
+  return(x)
+}
+gn<-gini(freq[1,2],freq[2,2])
+k<-2
+gn/((k-1)/k)
+```
+```{r}
+freq <- as.data.frame(table(tra$Region))
+names(freq)[1] <- 'Kategori'
+
+gini <- function(a,b) {
+  a1 <- (a/(a+b))**2
+  b1 <- (b/(a+b))**2
+  x<-1-(a1 + b1)
+  return(x)
+}
+gn<-gini(freq[1,2],freq[2,2])
+k<-2
+gn/((k-1)/k)
+```
+
+## Entropi 
+
+```{r}
+entropy<-function(base,a,b) {
+  var <-  abs(((a)/(a+b))*log(((a)/(a+b)),base))-(((b)/(a+b))*log(((b)/(a+b)),base))
+  return(var)
+}
+ent<-entropy(10,freq[1,2],freq[2,2])
+k<-2
+ent/(log(k,10)) 
+
+```
+
+Entropi değeri oldukça yüksek çıkmıştır. Değişkenlik çoktur.
+
+
+
+
+```{r}
+library(tidyverse)
+ggplot(tra, aes(Sales,Profit))+
+  geom_point(size=2,shape=21,stroke=1,color="dodgerblue1", fill="white")+
+  geom_smooth(method = "lm", col="darkblue",se = FALSE)
+```
+"Sales" değişkeni ile "Profit" değişkeni arasında doğrusal olmama problemi olduğunu söyleyebiliriz. Satışın artmasıyla karın arttığını gözlemleyebiliyoruz. İki değişkenin ilişkisi ile çıkarılan grafikte olası iki adet aykırı değer olabilecek değer olduğunu görüyoruz. Şu an için çıkarmamayı tercih ediyoruz. İlerleyen süreçlerde model içerisinde problem çıkarırlarsa o zaman bu değişkenler hakkında tekrar düşünülebilir.
+
+```{r}
+ggplot(tra,aes(x=Sales,y=Profit))+
+  geom_point(size=1)+
+  geom_text(label=rownames(tra),nudge_x=0.25,nudge_y=0.25, check_overlap=T)+
+  geom_smooth(method=lm,col="red",se=FALSE)
+```
+
+
+```{r}
+library(ggExtra)
+gr<-ggplot(tra,aes(x=Sales,y=Profit))+
+  geom_point()+
+  geom_text(size=3,label=rownames(tra),nudge_x=0.25,
+            nudge_y=0.25, check_overlap=T)+
+  geom_smooth(method=lm,col="brown1", se=FALSE)
+
+ggMarginal(gr,type="histogram",fill="darksalmon")
+```
+
+  
+
+Daha detaylı bilgi sahibi olmak için bar plot grafiği de ekledik. Verilerin normal dağılmadığını gözlemliyoruz.
+
+Yukarıda aykırı değer olabileceği hakkında söz edilen değerlerin 181 ve 187 değerleri olduğunu görüyoruz.
+
+
+```{r}
+ggplot(tra,aes(x=Discount,y=Profit))+
+  geom_point(size=1)+
+  geom_text(label=rownames(tra),nudge_x=0.25,nudge_y=0.25, check_overlap=T)+
+  geom_smooth(method=lm,col="red",se=FALSE)
+```
+
+Discount değişkeni için aykırı değer olabilecek 181 ve 187 değerleri vardır ve dönüşüme ihtiyaç vardır.
+
+```{r}
+ggplot(tra,aes(x=Quantity,y=Profit))+
+  geom_point(size=1)+
+  geom_text(label=rownames(tra),nudge_x=0.25,nudge_y=0.25, check_overlap=T)+
+  geom_smooth(method=lm,col="red",se=FALSE)
+```
+
+
+Quantity değişkeni için aykırı değer olabilecek yine 181 ve 187 değerleri vardır ve dönüşüme ihtiyaç vardır.
+
+
+```{r}
+library(plotly)
+d_plot <- ggplot(tra, aes(Discount, Profit, fill=Region, shape=Region)) +
+  geom_point(position = position_jitter(width= 0.2, height = 0), size = 2)
+
+ggplotly(d_plot)
+```
+
+
+İndirim sağlamanın genel olarak kara çok etki etmediğini görüyoruz. Yalnızca batı bölgesinde 20% lik bir indirim sonrası çok büyük bir kara ulaşılmış ve Merkezde yapılan 80% lik bir indirim sonrası da çok büyük bir zarara uğranmıştır. Bunlar aykırı değer olabilirler. Fakat etkili değer olabileceklerinden verimizde tutmaya devam ediyoruz.
+
+
+### Kabarcık çizimi
+
+
+
+```{r}
+library(ggplot2)
+ggplot(tra, aes(Sales,Profit, color=Discount, size=Discount))+
+  geom_point(alpha=0.5, stroke=2)+
+  scale_size(range = c(1, 8))+
+  scale_color_gradient(low = "blue", high = "lightpink")
+
+```
+
+### Altıgen Çizim
+
+
+
+```{r}
+ggplot(tra,aes(x=Discount,y=Profit))+
+  geom_hex(bins=20, color = "white")+
+  scale_fill_gradient(low="mistyrose2", high="violetred3")
+```
+Aralarında doğrusal olmama problemi olduğunu söyleyebiliriz. Gözlemler en çok indirimin ve karın 0 olduğu yerde bulunmaktadır.
+
+### Kontür Çizimi
+
+
+```{r}
+ggplot(tra, aes(x=Sales, y=Profit) ) +
+  stat_density_2d(aes(fill = ..level..), geom = "polygon")+
+  scale_fill_distiller(palette = "Blues")
+```
+"Profit" değişkeni ve "Sales" değişkeni arasında değişen varyanslılık problemi olduğunu söyleyebiliriz.
+
+### Koşullu matris çizimi (?)
+
+### Korelasyon Haritası
+
+```{r}
+library(corrplot)
+corrplot(cor(tra[,9:12]), method = "ellipse")
+corrplot.mixed(cor(tra[,9:12]), lower = "number", 
+               upper = "square",tl.col = "black") 
+
+```
+
+
+
+Korelasyon haritasına bakarak nicel değişkenlerin birbirleriyle ilişkisinin çok yüksek olmadığını söyleyebiliriz.
+
+### Ortanca ve DAG değerleri bulmak.
+
+
+Bölgelere göre Kar üzerinden ortanca ve DAG değerlerini bulalım.
+
+
+
+```{r}
+library(dplyr)
+a<-tra %>% group_by(Region) %>%
+  dplyr:: summarize(Q1=quantile (Profit, probs=0.25), Median=quantile (Profit, probs=0.50), Q3=quantile(Profit, probs=0.75), DAG=Q3-Q1)
+a
+```
+
+
+Kategorilere göre Kar üzerinden ortanca ve DAG değerlerini bulalım.
+
+
+```{r}
+library(dplyr)
+b<-tra %>%group_by(Category) %>%
+  dplyr:: summarize(Q1=quantile (Profit, probs=0.25), Median=quantile (Profit, probs=0.50), Q3=quantile(Profit, probs=0.75), DAG=Q3-Q1)
+b
+```
+
+
+
+Taşıma şekline göre Kar üzerinden ortanca ve DAG değerlerini bulalım.
+
+
+```{r}
+library(dplyr)
+c<-tra %>%group_by(`Ship Mode` , .drop = FALSE) %>%
+  dplyr::  summarize(Q1=quantile (Profit , probs=0.25), Median=quantile (Profit, probs=0.50), Q3=quantile(Profit, probs=0.75), DAG=Q3-Q1)
+c
+```
+
+Alt kategorilere göre Kar üzerinden ortanca ve DAG değerlerini bulalım.
+
+```{r}
+library(dplyr)
+d<-tra %>%group_by( `Sub-Category`) %>%
+   dplyr:: summarize(Q1=quantile (Profit, probs=0.25), Median=quantile (Profit, probs=0.50), Q3=quantile(Profit, probs=0.75), DAG=Q3-Q1)
+d
+```
+
+
+### Ortanca izi çizimi 
+
+```{r}
+plot(a$Region,a$Median, xlab="Region", ylab="Ortanca", main="Ortanca izi cizimi")
+```
+```{r}
+plot(b$Category,b$Median, xlab="Category", ylab="Ortanca", main="Ortanca izi cizimi")
+```
+```{r}
+plot(c$`Ship Mode`,c$Median, xlab="Ship Mode", ylab="Ortanca", main="Ortanca izi cizimi")
+```
+
+
+```{r}
+plot(d$`Sub-Category`,d$Median, xlab="Sub-Category", ylab="Ortanca", main="Ortanca izi cizimi")
+```
+
+### Konum-Varyans Cizimi
+
+```{r}
+ggplot(a, aes(x=Median,y=DAG, color=Region, group=1))+
+  geom_point(size=4,alpha=0.6)+
+  geom_line(color="black")
+```
+
+Varyanslar homojen değil dönüşüme ihtiyaç var.
+
+
+```{r}
+ggplot(b, aes(x=Median,y=DAG, color=Category, group=1))+
+  geom_point(size=4,alpha=0.6)+
+  geom_line(color="black")
+```
+
+Varyanslar homojen değil dönüşüme ihtiyaç var.
+
+```{r}
+ggplot(c, aes(x=Median,y=DAG, color=`Ship Mode`, group=1))+
+  geom_point(size=4,alpha=0.6)+
+  geom_line(color="black")
+```
+
+
+Varyanslar homojen değil dönüşüme ihtiyaç var.
+
+```{r}
+ggplot(d, aes(x=Median,y=DAG, color=`Sub-Category`, group=1))+
+  geom_point(size=4,alpha=0.6)+
+  geom_line(color="black")
+```
+
+Varyanslar homojen değil dönüşüme ihtiyaç var.
+
+### Etkileşim
+
+```{r}
+etk_train<-tra%>%
+  group_by(Region,Category)%>% 
+  summarise(Median=median(Profit))
+etk_train
+
+ggplot(etk_train, aes(x = Category, y = Median,color=Region,group=Region)) +
+  geom_line() +
+  geom_point()
+```
+
+# Dönüşüm
+
+```{r}
+tra$sales_log<-log10(tra$Sales)
+```
+
+
+```{r}
+hist(tra$sales_log)
+```
+```{r}
+tra$sales_kok <- sqrt(tra$Sales)
+```
+
+```{r}
+hist(tra$sales_kok)
+```
+
+Sales değişkeni için log dönüşümünün yeterli olduğunu söyleyebiliriz. Log dönüşümünde normale yakınsadı.
+
+
+```{r}
+tra$discount_log<-log10(tra$Discount + 1 - min(tra$Discount))
+```
+
+```{r}
+hist(tra$discount_log)
+```
+```{r}
+tra$discount_kok <- sqrt(tra$Discount + 1 - min(tra$Discount))
+```
+
+```{r}
+hist(tra$discount_kok)
+```
+Discount değişkeni için log dönüşümünü kullanmayı tercih ediyoruz.
+
+```{r}
+tra$profit_log<-log10(tra$Profit + 1 - min(tra$Profit))
+```
+
+```{r}
+hist(tra$profit_log)
+```
+
+```{r}
+tra$profit_kok <- sqrt(tra$Profit + 1 - min(tra$Profit))
+```
+
+
+```{r}
+hist(tra$profit_kok)
+```
+```{r}
+tra$profit_kare <-(tra$Profit)^(-1)
+```
+
+```{r}
+hist(tra$profit_kare)
+```
+
+
+Profit değişkeni için de ters dönüşüm tercih ediyoruz.
+```{r}
+tra$quantity_log<-log10(tra$Quantity)
+```
+
+```{r}
+hist(tra$quantity_log)
+```
+```{r}
+tra$quantity_kok <- sqrt(tra$Quantity)
+```
+
+```{r}
+hist(tra$quantity_kok)
+```
+Quantity değişkeni için log dönüşümünü uygulamayı tercih ediyoruz.
+
+# Düzleştirme
+
+
+```{r}
+ggplot(tra, aes(sales_log,profit_kare,label=rownames(tra)))+
+  geom_point(size=1)+
+  geom_text(label=rownames(tra),nudge_x=0.04,check_overlap=T,size=2.5)+
+  geom_smooth(method = "loess", col="darkblue",se = FALSE)
+
+```
+
+```{r}
+ggplot(tra, aes(discount_log,profit_kare,label=rownames(tra)))+
+  geom_point(size=1)+
+  geom_text(label=rownames(tra),nudge_x=0.04,check_overlap=T,size=2.5)+
+  geom_smooth(method = "loess", col="darkblue",se = FALSE)
+
+```
+```{r}
+ggplot(tra, aes(quantity_log,profit_kare , label=rownames(tra)))+
+  geom_point(size=1)+
+  geom_text(label=rownames(tra),nudge_x=0.04,check_overlap=T,size=2.5)+
+  geom_smooth(method = "loess", col="darkblue",se = FALSE)
+
+```
+
+```{r}
+lower_bound_quantity_log <- median(tra$quantity_log) - 3 * mad(tra$quantity_log, constant = 1)
+lower_bound_quantity_log
+```
+
+
+```{r}
+upper_bound_quantity_log <- median(tra$quantity_log) + 3 * mad(tra$quantity_log, constant = 1)
+upper_bound_quantity_log
+```
+
+```{r}
+outlier_ind_quantity_log <- which(tra$quantity_log < lower_bound_discount | tra$quantity_log > upper_bound_discount)
+outlier_ind_quantity_log
+```
+```{r}
+lower_bound_sales_log <- median(tra$sales_log) - 3 * mad(tra$sales_log, constant = 1)
+lower_bound_sales_log
+```
+
+
+```{r}
+upper_bound_sales_log <- median(tra$sales_log) + 3 * mad(tra$sales_log, constant = 1)
+upper_bound_sales_log
+```
+
+```{r}
+outlier_ind_sales_log <- which(tra$sales_log < lower_bound_sales_log | tra$sales_log > upper_bound_sales_log)
+outlier_ind_sales_log
+```
+```{r}
+lower_bound_discount_log <- median(tra$discount_log) - 3 * mad(tra$discount_log, constant = 1)
+lower_bound_discount_log
+```
+
+
+```{r}
+upper_bound_discount_log <- median(tra$discount_log) + 3 * mad(tra$discount_log, constant = 1)
+upper_bound_discount_log
+```
+
+```{r}
+outlier_ind_discount_log <- which(tra$discount_log < lower_bound_discount_log | tra$discount_log > upper_bound_discount_log)
+outlier_ind_discount_log
+```
+```{r}
+lower_bound_profit_kare <- median(tra$profit_kare) - 3 * mad(tra$profit_kare, constant = 1)
+lower_bound_profit_kare
+```
+
+
+
+```{r}
+upper_bound_profit_kare <- median(tra$profit_kare) + 3 * mad(tra$profit_kare, constant = 1)
+upper_bound_profit_kare
+```
+
+```{r}
+outlier_ind_profit_kare <- which(tra$profit_kare < lower_bound_profit_kare | tra$profit_kare > upper_bound_profit_kare)
+outlier_ind_profit_kare
+```
+
+
+
+
+Dönüşümler aykırı/uç değerleri önemli ölçüde azalttığını görüyoruz. Etkili değer olabilecekleri için çıkarmamayı tercih ediyoruz.
+
+
+Sales değişkenimizi merkezileştiriyoruz.
+
+```{r}
+mean_sales<-mean(tra$Sales)
+tra$sales_merkez<-(tra$Profit-mean_sales)
+```
+
+```{r}
+ggplot(tra, aes(x = sales_merkez, y =profit_kare )) +
+  stat_smooth(method = "lm", se = FALSE, color = "green", formula = y ~ x) +
+  stat_smooth(method = "lm", se = FALSE, color = "blue", formula = y ~ x + I(x ^ 2)) +
+  stat_smooth(method = "lm", se = FALSE, color = "red", formula = y ~ x + I(x ^ 2)+ I(x ^ 3)) +
+  geom_point(colour = "black", size = 1)
+```
+
+Kırmızı çizgimiz noktalarla en iyi uyuşan çizgidir. Kübik dönüşüm gerekmektedir.
+
+
+loglu sales'i merkezleştirip karesel terimlere bakıyoruz
+
+```{r}
+mean_saleslog<-mean(tra$sales_log)
+tra$sales_log_merkez<-(tra$sales_log-mean_saleslog)
+```
+
+
+```{r}
+ggplot(tra, aes(x = sales_log_merkez, y =profit_kare )) +
+  stat_smooth(method = "lm", se = FALSE, color = "green", formula = y ~ x) +
+  stat_smooth(method = "lm", se = FALSE, color = "blue", formula = y ~ x + I(x ^ 2)) +
+  stat_smooth(method = "lm", se = FALSE, color = "red", formula = y ~ x + I(x ^ 2)+ I(x ^ 3)) +
+  geom_point(colour = "black", size = 1)
+```
+```{r}
+ggplot(tra, aes(x = sales_log_merkez, y =profit_kare )) +
+  stat_smooth(method = "lm", se = FALSE, color = "magenta", formula = y ~ x) +
+  stat_smooth(method = "lm", se = FALSE, color = "green", formula = y ~ x + I(x ^ 2)) +
+  stat_smooth(method = "lm", se = FALSE, color = "cyan", formula = y ~ x + I(x ^ 2)+ I(x ^ 3)) +
+  geom_point(colour = "black", size = 1)
+```
+
+
+Tukey's Ladder
+
+
+```{r}
+library(rcompanion)
+profit_tukey<-transformTukey(tra$Profit + 1 - min(tra$Profit),plotit=FALSE)
+
+profit_tukey<- transformTukey(tra$Sales, plotit=FALSE)
+
+
+```
+
+
+# Box - Cox
+
+Profit için
+
+
+```{r}
+library(MASS)
+
+Box_profit<- boxcox(tra$Profit + 1 - min(tra$Profit) ~ 1,            
+                 lambda = seq(-6,6,0.1))      
+Cox_profit<- data.frame(Box_profit$x, Box_profit$y) 
+Cox_profit <- Cox_profit[order(-Cox_profit$Box_profit.y),]  
+Cox_profit[1,] 
+lambda <- Cox_profit[1, "Box_profit.x"]
+lambda
+```
+
+Sales için 
+
+```{r}
+library(MASS)
+
+Box_sales<- boxcox(tra$Sales ~ 1,            
+                 lambda = seq(-6,6,0.1))      
+Cox_sales<- data.frame(Box_sales$x, Box_sales$y) 
+Cox_sales <- Cox_sales[order(-Cox_sales$Box_sales.y),]  
+Cox_sales[1,] 
+lambda <- Cox_sales[1, "Box_sales.x"]
+lambda
+```
+
+
+Ham hali üzerinden saçılım matrisi
+
+
+Çarpıklık gözlemi 
+
+```{r}
+orj<-tra[,c(9,10,11,12)]
+library(PerformanceAnalytics)
+chart.Correlation(orj, histogram=TRUE, pch=19)
+```
+
+```{r}
+transform_train<-tra[,c(15,21,17,19)] 
+chart.Correlation(transform_train, histogram=TRUE, pch=19)
+```
+# Birliktelik İstatistikleri
+
+```{r}
+dt1<-table(tra$Category,tra$Region)
+prop.table(dt1,2) 
+round(100*prop.table(dt1,2), 2) 
+addmargins(round(prop.table(dt1,2), 2),1)
+```
+
+prop.table(data.matrix(rowsum(...)), 1)
+```{r}
+dt1<-table(tra$Category,tra$Region)
+prop.table(data.matrix(rowsum(2,1)), 1)
+round(100*prop.table(dt1,2), 2) 
+```
+
+```{r}
+library("gplots")
+balloonplot(t(dt1), main ="Category ve Region  ", xlab ="", ylab="",
+            label = FALSE,show.margins = FALSE)
+```
+
+Office Supplies kategorisi her bölgede çok daha fazladır.
+
+```{r}
+dt2<-table(tra$`Sub-Category`,tra$Region)
+prop.table(dt2,2) 
+round(100*prop.table(dt2,2), 2) 
+addmargins(round(prop.table(dt2,2), 2),1)
+```
+
+
+```{r}
+dt3<-table(tra$Segment,tra$Region)
+prop.table(dt3,2) 
+round(100*prop.table(dt3,2), 2) 
+addmargins(round(prop.table(dt3,2), 2),1)
+```
+
+```{r}
+library("gplots")
+balloonplot(t(dt3), main ="Segment ve Region  ", xlab ="", ylab="",
+            label = FALSE,show.margins = FALSE)
+```
+
+Consumer segmenti her bölgede daha baskın gelmektedir.
+
+```{r}
+dt_c<-table(tra$Region,tra$Region)
+dtc_exp <- chisq.test(dt_c)$expected
+rowcs <- function(i, obs, exp) {
+  sum(((obs[i,] - exp[i,])^2)/exp[i,])
+}
+
+chi_dtc<-as.matrix(lapply(seq_len(nrow(dt_c)), rowcs, obs = dt_c, exp = dtc_exp))
+rownames(chi_dtc)<-rownames(dt_c)
+chi_dtc
+
+```
+
+```{r}
+library(inspectdf)
+library(dplyr)
+tra %>% inspect_types()
+tra_cat<-tra %>% inspect_cat()
+tra_cat$levels$Region
+
+```
+
+```{r}
+tra_cat %>% show_plot()
+```
+
+# Model Geliştirme ve Geçerlilik
+
+
+## Test kümesi 
+```{r}
+library(readxl)
+test <- read_excel("C:/Users/SİMAY/Desktop/Lessons/Veri Analizi/verianalizi_proje/test.xlsx")
+View(test)
+```
+
+```{r}
+test$`Ship Mode` <- factor(test$`Ship Mode`, levels=c("Second Class","Standard Class","First Class","Same Day"))
+test$Segment <- factor(test$Segment, levels=c ("Consumer","Home Office","Corporate"))
+test$Country <- factor(test$Country, levels=c ("United States"))
+test$Country <- factor(test$Country, levels=c ("United States"))
+test$Region <- factor(test$Region, levels=c("West","Central","East","South"))
+test$Region <- factor(test$Region, levels=c("West","Central","East","South"))
+test$Category <- factor(test$Category, levels=c("Technology","Office Supplies","Furniture"))
+test$`Sub-Category` <- as.factor(test$`Sub-Category`)
+test$City <- as.factor(test$City)
+test$State <- as.factor(test$State)
+Quantity <- as.numeric(test$Quantity)
+Discount <- as.numeric(test$Discount)
+Profit <- as.numeric(test$Profit)
+Sales <- as.numeric(test$Sales)
+summary(test)
+summary(test)
+```
+
+Sales değişkeni için logaritmik dönüşüm
+
+```{r}
+test$sales_log<-log10(test$Sales)
+```
+
+Discount değişkeni için logaritmik dönüşüm
+
+```{r}
+test$discount_log<-log10(test$Discount + 1 - min(test$Discount))
+```
+
+
+profit değişkeni için karesel
+
+```{r}
+test$profit_kare<-(test$Profit)^(-1)
+```
+
+quantity değişkeni için log dönüşümü 
+
+```{r}
+test$quantity_log<-log10(test$Quantity)
+```
+
+
+```{r}
+test$sales_log_merkez<-(test$sales_log-mean(test$sales_log))
+```
+
+## Seçenek modeller
+
+```{r}
+fit1<-lm(Profit ~ Sales+Region+Category, data=tra)
+summary(fit1)
+fit1_1<-lm(Profit ~ Sales+Region, data=tra)
+summary(fit1_1)
+```
+
+
+##Tahmin 
+
+```{r}
+predictions <- predict(fit1_1, test) #test uzerınden
+```
+
+
+## Model performans
+```{r}
+library(caret)
+```
+
+```{r}
+#train:
+round(defaultSummary(data.frame(obs=tra$Profit,pred=predict(fit1_1,tra))),3)
+```
+```{r}
+#merkezilestirilmis uzerinden
+library(DataCombine)
+tra[is.na(tra) | tra == "Inf"] = NA
+dn <- DropNA(tra)
+```
+
+```{r}
+#test:
+round(defaultSummary(data.frame(obs=test$Profit,pred=predict(fit1_1,test))),2)
+```
+
+
+```{r}
+library(ggfortify)
+ggplot2::autoplot(fit1_1)
+```
+## Modelleme - polinomial
+
+
+
+
+
+
+```{r}
+fit2<-lm(profit_kare ~ sales_log_merkez + I(sales_log_merkez^2)+I(sales_log_merkez^3)+Region+Category , data = tra)
+summary(fit2)
+fit2<-lm(profit_kare ~ sales_log +Region, data = tra)
+summary(fit2)
+```
+
+
+```{r}
+fit2_res<-as.data.frame(t(defaultSummary(data.frame(obs=tra$profit_kare,pred=predict(fit2,tra)))))
+rownames(fit2_res)<-"fit2"
+```
+
+```{r}
+fit3<-lm(profit_kare ~ sales_log_merkez + I(sales_log_merkez^2)+ I(sales_log_merkez^3)+Region+Region*sales_log_merkez , data = tra)
+summary(fit3)
+```
+
+```{r}
+fit3_res<-as.data.frame(t(defaultSummary(data.frame(obs=tra$profit_kare,pred=predict(fit3,tra)))))
+rownames(fit3_res)<-"fit3"
+```
+
+
+```{r}
+fit4<-lm(profit_kare ~ Sales+Region+Category, data = tra)
+summary(fit4)
+fit4<-lm(profit_kare ~ Sales+Region, data = tra)
+summary(fit4)
+fit4_res<-as.data.frame(t(defaultSummary(data.frame(obs=tra$profit_kare,pred=predict(fit4,tra)))))
+rownames(fit4_res)<-"fit4"
+```
+
+```{r}
+fit5<-lm(profit_kare ~ Sales, data = tra)
+summary(fit5)
+fit5_res<-as.data.frame(t(defaultSummary(data.frame(obs=tra$profit_kare,pred=predict(fit5,tra)))))
+rownames(fit5_res)<-"fit5"
+```
+
+
+
+
+
+```{r}
+#test icin:
+fit2_res_test<-as.data.frame(t(defaultSummary(data.frame(obs=test$profit_kare,pred=predict(fit2,test)))))
+rownames(fit2_res_test)<-"fit2"
+```
+
+```{r}
+fit3_res_test<-as.data.frame(t(defaultSummary(data.frame(obs=test$profit_kare,pred=predict(fit3,test)))))
+rownames(fit3_res_test)<-"fit3"
+```
+
+```{r}
+fit4_res_test<-as.data.frame(t(defaultSummary(data.frame(obs=test$profit_kare,pred=predict(fit4,test)))))
+rownames(fit4_res_test)<-"fit4"
+```
+
+```{r}
+fit5_res_test<-as.data.frame(t(defaultSummary(data.frame(obs=test$profit_kare,pred=predict(fit5,test)))))
+rownames(fit5_res_test)<-"fit5"
+
+```
+
+
+```{r}
+
+round(rbind(fit2_res_test,fit3_res_test,fit4_res_test,fit5_res_test),2)
+```
+
+```{r}
+list2<-list(fit2,fit3,fit4,fit5)
+
+```
+
+
+```{r}
+PRESS <- function(linmodel) {   pr <- residuals(linmodel)/(1 - lm.influence(linmodel)$hat)
+sum(pr^2)
+}
+for (i in list2) {
+  print(paste("Press:",round(PRESS(i),3)))
+}
+
+```
+
+```{r}
+library(ggfortify)
+autoplot(fit2)
+
+```
+
+```{r}
+library(rpart)
+library(rpart.plot)
+
+cart<-rpart(profit_kare~sales_log+Region+Category , data=tra)
+cart$variable.importance
+
+prp(cart, type=5)
+
+```
+
+
+# SONUÇ
+
+Yaptığımız analizler sonucunda kârı artırmak için yüksek kâr getiren "Copiers " yani fotokopi makinelerine ağırlık verilmesi gerektiğini gözlemliyoruz. Özellikle bu ağırlığın merkez bölge için daha dazla özelleştirilmesi gerektiğini söyleyebiliriz. En büyük zararı ise Doğu bölgesinde " Machines" için gözlemledik, fakat zaman zaman makineler doğu bölgesinde kâr sağlamıştır. En yüksek zarara neden olan makinenin hangisi olduğunu tespit edip bunu düzeltmek üzerine yoğunlaşabiliriz. Ve yine Doğu bölgesinde "Supplies" değişkeninin sadece zarara uğrattığını gözlemleyebiliriz. Mobilyalar için ise "Tables" değişkeni Güney bölgesinde zarara uğratmıştır. "Bookcases" değişkeni ise yine Doğu bölgesinde zarar getirmiştir. Modellerden ise en az hatayı ve en yüksek R^2 değerini veren 2.modeli seçiyoruz.
+
